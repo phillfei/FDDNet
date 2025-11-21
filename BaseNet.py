@@ -35,7 +35,7 @@ def conv_1x1(in_channel, out_channel):
     )
 
 class ContrastiveAttention(nn.Module):
-    """使用对比注意力突出差异区域"""
+    """Use contrastive attention to highlight difference regions"""
     def __init__(self, channels):
         super().__init__()
         self.query = nn.Conv2d(channels, channels//8, 1)
@@ -46,21 +46,19 @@ class ContrastiveAttention(nn.Module):
     def forward(self, featA, featB):
         B, C, H, W = featA.shape
         
-        # 计算交叉注意力，找出差异区域
         Q = self.query(featB).view(B, -1, H*W).permute(0, 2, 1)
         K = self.key(featA).view(B, -1, H*W)
         
-        attention = torch.bmm(Q, K)  # (B, H*W, H*W)
+        attention = torch.bmm(Q, K)
         attention = F.softmax(attention, dim=-1)
         
-        # 用差异构建value (featB - featA)
         diff = featB - featA
         V = self.value(diff).view(B, -1, H*W)
         
         out = torch.bmm(V, attention.permute(0, 2, 1))
         out = out.view(B, C, H, W)
         
-        return diff + self.gamma * out  # 放大的差异
+        return diff + self.gamma * out
 
 
 class ChannelAttention(nn.Module):
@@ -310,8 +308,8 @@ class MultiSpectralAttentionLayer(torch.nn.Module):
             # This is for compatibility in instance segmentation and object detection.
         y = self.dct_layer(x_pooled)        # y:(4,256)
 
-        y = self.fc(y).view(n, c, 1, 1)         # y:(4,256,1,1)
-        return x * y.expand_as(x)       # pytorch中的expand_as:扩张张量的尺寸至括号里张量的尺寸 (4,256,64,64)  注意这里是逐元素相乘，不同于qkv的torch.matmul
+        y = self.fc(y).view(n, c, 1, 1)
+        return x * y.expand_as(x)
 
 class MultiSpectralDCTLayer(nn.Module):
     """
@@ -349,13 +347,12 @@ class MultiSpectralDCTLayer(nn.Module):
         result = torch.sum(x, dim=[2,3])        # result:(4,256)
         return result
 
-    def build_filter(self, pos, freq, POS):     # 对应公式中i/j, h/w, H/W   一般是pos即i/j在变
-                # self.build_filter(t_x, u_x, tile_size_x)  self.build_filter(t_y, v_y, tile_size_y)
+    def build_filter(self, pos, freq, POS):
         result = math.cos(math.pi * freq * (pos + 0.5) / POS) / math.sqrt(POS) 
         if freq == 0:
             return result
         else:
-            return result * math.sqrt(2)        # 为什么是乘以根号2？
+            return result * math.sqrt(2)
     
     def get_dct_filter(self, tile_size_x, tile_size_y, mapper_x, mapper_y, channel):
                 # dct_h(height), dct_w(weight), mapper_x, mapper_y, channel(256,512,1024,2048)
@@ -384,7 +381,6 @@ class BaseNet(nn.Module):
         self.catconv3 = dsconv_3x3(channel_list[2] * 2, out_channel=128)
         self.catconv4 = dsconv_3x3(channel_list[3] * 2, out_channel=128)
 
-        # # 为每个层级添加对比注意力模块，用于放大差异
         # self.contrast_attn1 = ContrastiveAttention(channel_list[0])
         # self.contrast_attn2 = ContrastiveAttention(channel_list[1])
         # self.contrast_attn3 = ContrastiveAttention(channel_list[2])
@@ -407,8 +403,7 @@ class BaseNet(nn.Module):
         xA1, xA2, xA3, xA4 = featuresA
         xB1, xB2, xB3, xB4 = featuresB
 
-        # 使用对比注意力放大差异区域
-        diff1_enhanced = xB1-xA1  # (B, C, H, W)
+        diff1_enhanced = xB1-xA1
         diff2_enhanced = xB2-xA2
         diff3_enhanced = xB3-xA3
         diff4_enhanced = xB4-xA4
