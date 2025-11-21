@@ -11,13 +11,13 @@ from FDDNet import FDDNet
 
 def build_from_cfg(cfg):
     """
-    从配置构建模型组件
+    Build model component from config
     
     Args:
-        cfg: 配置字典，包含 'type' 和 'kwargs'
+        cfg: Config dict containing 'type' and 'kwargs'
     
     Returns:
-        构建的模型组件
+        Built model component
     """
     if isinstance(cfg, dict):
         component_type = cfg.get('type')
@@ -30,20 +30,19 @@ def build_from_cfg(cfg):
         else:
             raise ValueError(f"Unknown component type: {component_type}")
     else:
-        # 如果cfg不是字典，直接返回（向后兼容）
         return cfg
 
 
 class myModel(nn.Module):
     """
-    完整的变更检测模型
-    结合backbone和decoderhead
+    Complete change detection model
+    Combines backbone and decoderhead
     """
     
     def __init__(self, cfg):
         """
         Args:
-            cfg: 配置对象或字典，包含backbone和decoderhead的配置
+            cfg: Config object or dict containing backbone and decoderhead config
         """
         super(myModel, self).__init__()
         self.backbone = build_from_cfg(cfg.backbone)
@@ -51,29 +50,27 @@ class myModel(nn.Module):
     
     def forward(self, x1, x2, gtmask=None):
         """
-        前向传播
+        Forward pass
         
         Args:
-            x1: 第一张图像 (B, C, H, W)
-            x2: 第二张图像 (B, C, H, W)
-            gtmask: 可选的ground truth mask，用于训练时使用（目前FDDNet不支持，会被忽略）
+            x1: First image (B, C, H, W)
+            x2: Second image (B, C, H, W)
+            gtmask: Optional ground truth mask for training (currently not supported by FDDNet, will be ignored)
         
         Returns:
-            变更检测结果
+            Change detection result
         """
         backbone_outputs = self.backbone(x1, x2)
         if gtmask == None:
             x_list = self.decoderhead(backbone_outputs)
         else:
-            # FDDNet目前不支持gtmask参数，暂时忽略
-            # 如果需要支持gtmask，需要修改FDDNet的forward方法
             x_list = self.decoderhead(backbone_outputs)
         return x_list
 
 
 class ModelConfig:
     """
-    模型配置类，用于存储backbone和decoderhead的配置
+    Model config class for storing backbone and decoderhead config
     """
     def __init__(self, backbone_cfg, decoderhead_cfg):
         self.backbone = backbone_cfg
@@ -82,13 +79,13 @@ class ModelConfig:
 
 def get_channel_list_by_backbone(backbone_name):
     """
-    根据backbone名称获取对应的channel_list
+    Get channel_list based on backbone name
     
     Args:
-        backbone_name: Backbone名称 ('vgg11', 'resnet18', or 'densenet121')
+        backbone_name: Backbone name ('vgg11', 'resnet18', or 'densenet121')
     
     Returns:
-        对应的channel_list
+        Corresponding channel_list
     """
     backbone_name = backbone_name.lower()
     channel_map = {
@@ -129,12 +126,10 @@ def build_model(backbone_name='resnet18', num_class=2, pretrained=True,
         >>> output = model(imgA, imgB)
         >>> print(output.shape)  # (1, 2, 256, 256)
     """
-    # 如果没有提供channel_list，根据backbone自动选择
     if channel_list is None:
         channel_list = get_channel_list_by_backbone(backbone_name)
         print(f"Using default channel_list for {backbone_name}: {channel_list}")
     
-    # 创建配置
     backbone_cfg = {
         'type': 'ChangeDetectionBackbone',
         'kwargs': {
@@ -154,7 +149,6 @@ def build_model(backbone_name='resnet18', num_class=2, pretrained=True,
     
     cfg = ModelConfig(backbone_cfg, decoderhead_cfg)
     
-    # 创建模型
     model = myModel(cfg)
     return model
 
