@@ -35,7 +35,6 @@ def conv_1x1(in_channel, out_channel):
     )
 
 class SimpleMLP(nn.Module):
-    """简单的MLP模块用于特征增强"""
     def __init__(self, input_channels, output_channels=None, expansion_ratio=2):
         super().__init__()
         if output_channels is None:
@@ -51,7 +50,6 @@ class SimpleMLP(nn.Module):
         )
         self.activation = nn.ReLU(inplace=True)
         
-        # 如果输入输出通道数不同，需要调整残差连接
         if input_channels != output_channels:
             self.residual_proj = nn.Conv2d(input_channels, output_channels, 1, bias=False)
         else:
@@ -64,7 +62,7 @@ class SimpleMLP(nn.Module):
             residual = x
             
         out = self.mlp(x)
-        out = out + residual  # 残差连接
+        out = out + residual
         out = self.activation(out)
         return out
 
@@ -78,10 +76,8 @@ class MAD(nn.Module):
     """
     def __init__(self, channels):
         super().__init__()
-        # gamma: 控制放大强度，初始化为0.5而不是0，加快收敛
         self.gamma = nn.Parameter(torch.tensor(0.5))
         
-        # 可选：使用1x1卷积学习差异的通道间关系
         self.diff_transform = nn.Sequential(
             nn.Conv2d(channels, channels, 1, bias=False),
             nn.BatchNorm2d(channels)
@@ -90,33 +86,13 @@ class MAD(nn.Module):
     def forward(self, featA, featB):
         B, C, H, W = featA.shape
         
-        # 1. 计算原始差异
         diff = featB - featA
-        
-        # 2. 计算差异的幅值（每个像素位置的L2范数）
-        # diff_magnitude: (B, 1, H, W)，表示每个空间位置的差异强度
         diff_magnitude = torch.sqrt((diff ** 2).sum(dim=1, keepdim=True) + 1e-6)
-        
-        # 3. 归一化差异幅值，使其相对于全局平均值
-        # 这样可以自适应不同尺度的特征
         magnitude_mean = diff_magnitude.mean(dim=[2, 3], keepdim=True)
         magnitude_normalized = diff_magnitude / (magnitude_mean + 1e-6)
-        
-        # 4. 计算重要性权重（非线性放大函数）
-        # 使用 tanh 将归一化幅值映射到合理范围，然后用 exp 进行指数放大
-        # tanh 作用：平滑映射，避免极端值
         importance = torch.tanh(magnitude_normalized)
-        
-        # 5. 指数放大：差异大的地方放大更多
-        # amplification_factor: (B, 1, H, W)
-        # 公式：1 + gamma * (e^importance - 1)
-        # 当 importance 大时，e^importance 显著增大，实现非线性放大
         amplification_factor = 1.0 + self.gamma * (torch.exp(importance) - 1.0)
-        
-        # 6. 应用放大因子到原始差异
         amplified_diff = diff * amplification_factor
-        
-        # 7. 可选：通过卷积学习差异的通道间关系
         amplified_diff = self.diff_transform(amplified_diff)
         
         return amplified_diff
@@ -282,31 +258,20 @@ class SFF(nn.Module):
         return out
 
 class PixelAdaptiveDistanceSSFF(nn.Module):
-    """像素级自适应的距离引导特征融合
-    
-    核心思想：
-    1. x_big和x_small都已包含距离偏置
-    2. 为每个像素计算最合适的融合权重
-    3. 使用距离一致性作为融合依据
-    """
     def __init__(self, channels):
         super(PixelAdaptiveDistanceSSFF, self).__init__()
         
-        # 特征投影：确保在同一空间
         self.proj_big = nn.Conv2d(channels, channels, 1)
         self.proj_small = nn.Conv2d(channels, channels, 1)
         
-        # 像素级权重生成网络
-        # 输入：big和small的拼接 -> 输出：每个像素的权重
         self.pixel_weight_net = nn.Sequential(
             nn.Conv2d(channels * 2, channels, 3, padding=1),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channels, 2, 1),  # 输出2个通道：alpha和beta
-            nn.Softmax(dim=1)  # 确保权重和为1
+            nn.Conv2d(channels, 2, 1),
+            nn.Softmax(dim=1)
         )
         
-        # 全局上下文（用于稳定权重）
         self.global_context = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(channels * 2, channels // 4, 1),
@@ -315,84 +280,58 @@ class PixelAdaptiveDistanceSSFF(nn.Module):
             nn.Sigmoid()
         )
         
-        # 特征精化
         self.refine = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True)
         )
         
-        # 可学习的融合权重参数（局部和全局的平衡）
-        self.local_weight = nn.Parameter(torch.tensor(0.7))   # 局部权重
-        self.global_weight = nn.Parameter(torch.tensor(0.3))  # 全局权重
+        self.local_weight = nn.Parameter(torch.tensor(0.7))
+        self.global_weight = nn.Parameter(torch.tensor(0.3))
         
     def forward(self, x_big, x_small):
-        """
-        x_big: 已添加距离偏置的高层特征 (B, C, H_big, W_big)
-        x_small: 已添加距离偏置的低层特征 (B, C, H_small, W_small)
-        
-        返回：每个像素最优融合后的特征
-        """
         B, C, H, W = x_small.shape
         
-        # 1. 特征投影
         big_proj = self.proj_big(x_big)
         small_proj = self.proj_small(x_small)
         
-        # 2. 上采样big特征到small的分辨率
         big_proj_up = F.interpolate(big_proj, (H, W), 
                                      mode='bilinear', align_corners=False)
         
-        # 3. 拼接特征
         concat_feat = torch.cat([big_proj_up, small_proj], dim=1)
         
-        # 4. 生成像素级权重（每个像素有不同的alpha和beta）
-        pixel_weights = self.pixel_weight_net(concat_feat)  # (B, 2, H, W)
-        local_alpha = pixel_weights[:, 0:1, :, :]  # (B, 1, H, W)
-        local_beta = pixel_weights[:, 1:2, :, :]   # (B, 1, H, W)
+        pixel_weights = self.pixel_weight_net(concat_feat)
+        local_alpha = pixel_weights[:, 0:1, :, :]
+        local_beta = pixel_weights[:, 1:2, :, :]
         
-        # 5. 全局上下文引导（稳定局部权重）
-        global_weights = self.global_context(concat_feat)  # (B, 2, 1, 1)
+        global_weights = self.global_context(concat_feat)
         global_alpha = global_weights[:, 0:1, :, :]
         global_beta = global_weights[:, 1:2, :, :]
         
-        # 6. 归一化可学习权重（确保和为1）
         weight_sum = torch.abs(self.local_weight) + torch.abs(self.global_weight)
         norm_local = torch.abs(self.local_weight) / weight_sum
         norm_global = torch.abs(self.global_weight) / weight_sum
         
-        # 7. 融合局部和全局权重
         final_alpha = local_alpha * norm_local + global_alpha * norm_global
         final_beta = local_beta * norm_local + global_beta * norm_global
         
-        # 8. 上采样原始x_big
         x_big_up = F.interpolate(x_big, (H, W), 
                                  mode='bilinear', align_corners=False)
         
-        # 9. 像素级自适应融合
-        # 每个像素根据自己的alpha和beta进行融合
         fused = final_alpha * x_big_up + final_beta * x_small
         
-        # 10. 精化
         output = self.refine(fused)
         
         return output
 
-# 保持向后兼容
 BidirectionalSSFF = PixelAdaptiveDistanceSSFF
 SSFF = PixelAdaptiveDistanceSSFF
 
 
 class GaussianDiffusionStep(nn.Module):
-    """单个高斯扩散步骤
-    
-    模仿扩散模型的去噪过程，逐步恢复特征细节
-    """
     def __init__(self, channels):
         super().__init__()
         
-        # 高斯噪声估计网络（模拟扩散去噪）
-        # 使用 GroupNorm 和 SiLU 提高训练稳定性
         self.noise_estimator = nn.Sequential(
             nn.Conv2d(channels * 2, channels, 3, padding=1, bias=False),
             nn.GroupNorm(8, channels),
@@ -403,59 +342,34 @@ class GaussianDiffusionStep(nn.Module):
             nn.Conv2d(channels, channels, 1)
         )
         
-        # 特征融合网络
         self.fusion = nn.Sequential(
             nn.Conv2d(channels * 2, channels, 1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True)
         )
         
-        # 残差权重（可学习）
         self.residual_weight = nn.Parameter(torch.tensor(0.5))
         
     def forward(self, noisy_feat, guide_feat):
-        """
-        noisy_feat: 当前的"噪声"特征（低分辨率，待恢复）
-        guide_feat: 引导特征（目标分辨率，包含细节信息）
-        
-        返回：去噪后的特征
-        """
-        # 拼接特征
         concat = torch.cat([noisy_feat, guide_feat], dim=1)
-        
-        # 估计"噪声"（实际是学习需要添加的细节）
         estimated_detail = self.noise_estimator(concat)
-        
-        # 去噪：添加估计的细节
         denoised = noisy_feat + self.residual_weight * estimated_detail
-        
-        # 融合引导特征
         fused = self.fusion(torch.cat([denoised, guide_feat], dim=1))
         
         return fused
 
 
 class ProgressiveGaussianDecoder(nn.Module):
-    """渐进式高斯扩散解码器
-    
-    核心思想：
-    1. 模仿扩散模型的去噪过程
-    2. 从粗糙特征（x4）逐步恢复到精细特征（x1）
-    3. 每一步都使用高斯扩散机制引导细节恢复
-    4. 避免直接融合导致的特征丢失
-    """
     def __init__(self, in_channel, num_class, diffusion_steps=3):
         super().__init__()
         
         self.diffusion_steps = diffusion_steps
         
-        # 扩散步骤网络（3步：x4->x3, x3->x2, x2->x1）
         self.diffusion_blocks = nn.ModuleList([
             GaussianDiffusionStep(in_channel) 
             for _ in range(diffusion_steps)
         ])
         
-        # 多尺度特征增强（在每个扩散步骤前）
         self.scale_enhance = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(in_channel, in_channel, 3, padding=1, bias=False),
@@ -465,7 +379,6 @@ class ProgressiveGaussianDecoder(nn.Module):
             for _ in range(diffusion_steps)
         ])
         
-        # 高斯平滑模块（模拟扩散过程）
         self.gaussian_smooth = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(in_channel, in_channel, 5, padding=2, groups=in_channel, bias=False),
@@ -475,7 +388,6 @@ class ProgressiveGaussianDecoder(nn.Module):
             for _ in range(diffusion_steps)
         ])
         
-        # 最终分类头
         self.classifier = nn.Sequential(
             nn.Conv2d(in_channel, in_channel // 2, 3, padding=1, bias=False),
             nn.BatchNorm2d(in_channel // 2),
@@ -484,46 +396,26 @@ class ProgressiveGaussianDecoder(nn.Module):
         )
         
     def forward(self, x1, x2, x3, x4):
-        """
-        x1: 最低层特征（最高分辨率，最多细节）
-        x2: 中低层特征
-        x3: 中高层特征
-        x4: 最高层特征（最低分辨率，最多语义）
-        
-        采用渐进式扩散恢复：x4 -> x3 -> x2 -> x1
-        """
-        # 初始化：从最高层特征开始
         current = x4
         
-        # 扩散步骤1：x4 -> x3 的尺度
-        # 1.1 上采样到x3的分辨率
         current = F.interpolate(current, size=x3.shape[2:], 
                                mode='bilinear', align_corners=False)
-        
-        # 1.2 高斯平滑（模拟扩散）
         current = self.gaussian_smooth[0](current)
-        
-        # 1.3 增强引导特征
         guide_x3 = self.scale_enhance[0](x3)
-        
-        # 1.4 扩散去噪步骤
         current = self.diffusion_blocks[0](current, guide_x3)
         
-        # 扩散步骤2：x3 -> x2 的尺度
         current = F.interpolate(current, size=x2.shape[2:], 
                                mode='bilinear', align_corners=False)
         current = self.gaussian_smooth[1](current)
         guide_x2 = self.scale_enhance[1](x2)
         current = self.diffusion_blocks[1](current, guide_x2)
         
-        # 扩散步骤3：x2 -> x1 的尺度
         current = F.interpolate(current, size=x1.shape[2:], 
                                mode='bilinear', align_corners=False)
         current = self.gaussian_smooth[2](current)
         guide_x1 = self.scale_enhance[2](x1)
         current = self.diffusion_blocks[2](current, guide_x1)
         
-        # 最终分类
         output = self.classifier(current)
         
         return output
@@ -599,15 +491,15 @@ class MultiSpectralAttentionLayer(torch.nn.Module):
     def forward(self, x):
         n,c,h,w = x.shape       # (4,256,64,64)
         x_pooled = x
-        if h != self.dct_h or w != self.dct_w:      # dct_h=dct_w=56
-            x_pooled = torch.nn.functional.adaptive_avg_pool2d(x, (self.dct_h, self.dct_w))# (4,256,56,56)
+        if h != self.dct_h or w != self.dct_w:
+            x_pooled = torch.nn.functional.adaptive_avg_pool2d(x, (self.dct_h, self.dct_w))
             # If you have concerns about one-line-change, don't worry.   :)
             # In the ImageNet models, this line will never be triggered. 
             # This is for compatibility in instance segmentation and object detection.
-        y = self.dct_layer(x_pooled)        # y:(4,256)
+        y = self.dct_layer(x_pooled)
 
-        y = self.fc(y).view(n, c, 1, 1)         # y:(4,256,1,1)
-        return x * y.expand_as(x)       # pytorch中的expand_as:扩张张量的尺寸至括号里张量的尺寸 (4,256,64,64)  注意这里是逐元素相乘，不同于qkv的torch.matmul
+        y = self.fc(y).view(n, c, 1, 1)
+        return x * y.expand_as(x)
 
 class MultiSpectralDCTLayer(nn.Module):
     """
@@ -636,28 +528,25 @@ class MultiSpectralDCTLayer(nn.Module):
 
         # num_freq, h, w
 
-    def forward(self, x):       # (4,256,56,56)
+    def forward(self, x):
         assert len(x.shape) == 4, 'x must been 4 dimensions, but got ' + str(len(x.shape))
-        # n, c, h, w = x.shape
 
-        x = x * self.weight     # weight:(256,56,56)  x:(4,256,56,56)
+        x = x * self.weight
 
-        result = torch.sum(x, dim=[2,3])        # result:(4,256)
+        result = torch.sum(x, dim=[2,3])
         return result
 
-    def build_filter(self, pos, freq, POS):     # 对应公式中i/j, h/w, H/W   一般是pos即i/j在变
-                # self.build_filter(t_x, u_x, tile_size_x)  self.build_filter(t_y, v_y, tile_size_y)
+    def build_filter(self, pos, freq, POS):
         result = math.cos(math.pi * freq * (pos + 0.5) / POS) / math.sqrt(POS) 
         if freq == 0:
             return result
         else:
-            return result * math.sqrt(2)        # 为什么是乘以根号2？
+            return result * math.sqrt(2)
     
     def get_dct_filter(self, tile_size_x, tile_size_y, mapper_x, mapper_y, channel):
-                # dct_h(height), dct_w(weight), mapper_x, mapper_y, channel(256,512,1024,2048)
-        dct_filter = torch.zeros(channel, tile_size_x, tile_size_y)     # (256,56,56)
+        dct_filter = torch.zeros(channel, tile_size_x, tile_size_y)
 
-        c_part = channel // len(mapper_x)       # c_part = 256/16 = 16
+        c_part = channel // len(mapper_x)
 
         for i, (u_x, v_y) in enumerate(zip(mapper_x, mapper_y)):
             for t_x in range(tile_size_x):
@@ -681,8 +570,6 @@ class FDDNet(nn.Module):
         self.mad3 = MAD(channel_list[2])
         self.mad4 = MAD(channel_list[3])
         
-        # 添加MLP模块用于特征增强（替代原来的catconv）
-        # 注意：MLP需要将通道数转换为transform_feat=128
         self.mlp1 = SimpleMLP(channel_list[0], output_channels=transform_feat)
         self.mlp2 = SimpleMLP(channel_list[1], output_channels=transform_feat)
         self.mlp3 = SimpleMLP(channel_list[2], output_channels=transform_feat)
@@ -692,12 +579,10 @@ class FDDNet(nn.Module):
         # self.sff2 = SFF(transform_feat)
         # self.sff3 = SFF(transform_feat)
 
-        # 像素级自适应距离引导特征融合模块
         self.ssff1 = PixelAdaptiveDistanceSSFF(transform_feat)
         self.ssff2 = PixelAdaptiveDistanceSSFF(transform_feat)
         self.ssff3 = PixelAdaptiveDistanceSSFF(transform_feat)
 
-        # 使用渐进式高斯扩散解码器，模仿颜色差异的扩散恢复特征
         self.lightdecoder = ProgressiveGaussianDecoder(transform_feat, num_class, diffusion_steps=3)
 
         self.catconv = conv_3x3(transform_feat*4, transform_feat)
@@ -713,14 +598,11 @@ class FDDNet(nn.Module):
         diff3_enhanced = self.mad3(xA3, xB3)
         diff4_enhanced = self.mad4(xA4, xB4)
 
-        # 将差异作为偏置增强特征A，而不是通道拼接
-        # 核心思想：diff_enhanced作为xA的"变化偏置"，突出变化区域
-        enhanced_xA1 = xA1 + diff1_enhanced  # 差异作为偏置
+        enhanced_xA1 = xA1 + diff1_enhanced
         enhanced_xA2 = xA2 + diff2_enhanced
         enhanced_xA3 = xA3 + diff3_enhanced
         enhanced_xA4 = xA4 + diff4_enhanced
         
-        # 使用简单的MLP模块进一步增强特征
         x111 = self.mlp1(enhanced_xA1)
         x222 = self.mlp2(enhanced_xA2)
         x333 = self.mlp3(enhanced_xA3)
@@ -748,83 +630,69 @@ class FDDNet(nn.Module):
 
 
 if __name__ == "__main__":
-    print("ColourNet 参数量计算")
+    print("FDDNet Parameter Calculation")
     print("=" * 50)
     
-    # 创建模型实例
-    net = ColourNet(num_class=2, channel_list=[64, 128, 256, 512], transform_feat=128).cuda()
+    net = FDDNet(num_class=2, channel_list=[64, 128, 256, 512], transform_feat=128).cuda()
     
-    # 计算参数量
     total_params = sum(p.numel() for p in net.parameters())
     trainable_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     
-    print(f"总参数量: {total_params:,}")
-    print(f"可训练参数量: {trainable_params:,}")
-    print(f"模型大小: {total_params * 4 / (1024 * 1024):.2f} MB")
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Model size: {total_params * 4 / (1024 * 1024):.2f} MB")
     
-    # 测试前向传播
-    print("\n测试前向传播...")
-    # 模拟backbone输出特征
+    print("\nTesting forward pass...")
     featuresA = [
-        torch.randn(1, 64, 64, 64).cuda(),   # xA1
-        torch.randn(1, 128, 32, 32).cuda(),  # xA2
-        torch.randn(1, 256, 16, 16).cuda(),  # xA3
-        torch.randn(1, 512, 8, 8).cuda()     # xA4
+        torch.randn(1, 64, 64, 64).cuda(),
+        torch.randn(1, 128, 32, 32).cuda(),
+        torch.randn(1, 256, 16, 16).cuda(),
+        torch.randn(1, 512, 8, 8).cuda()
     ]
     featuresB = [
-        torch.randn(1, 64, 64, 64).cuda(),   # xB1
-        torch.randn(1, 128, 32, 32).cuda(),  # xB2
-        torch.randn(1, 256, 16, 16).cuda(),  # xB3
-        torch.randn(1, 512, 8, 8).cuda()     # xB4
+        torch.randn(1, 64, 64, 64).cuda(),
+        torch.randn(1, 128, 32, 32).cuda(),
+        torch.randn(1, 256, 16, 16).cuda(),
+        torch.randn(1, 512, 8, 8).cuda()
     ]
     
     input_data = (featuresA, featuresB)
     out = net(input_data)
     
-    print(f"输出形状: {out.shape}")
+    print(f"Output shape: {out.shape}")
     
-    # 计算FLOPs
-    print("\n计算FLOPs...")
+    print("\nCalculating FLOPs...")
     try:
         from fvcore.nn import FlopCountAnalysis, flop_count_table
         
-        # 设置模型为评估模式
         net.eval()
-        
-        # 使用fvcore计算FLOPs：注意这里将单个输入元组再包一层元组
-        # 以匹配 forward(self, x) 的签名，其中 x 本身是一个二元组(featuresA, featuresB)
         flops_analysis = FlopCountAnalysis(net, (input_data,))
         total_flops = flops_analysis.total()
         
-        print(f"总FLOPs: {total_flops:,}")
-        print(f"总GFLOPs: {total_flops / 1e9:.4f}")
+        print(f"Total FLOPs: {total_flops:,}")
+        print(f"Total GFLOPs: {total_flops / 1e9:.4f}")
         
-        # 打印详细的FLOPs表格（可选）
-        print("\n详细FLOPs分析:")
+        print("\nDetailed FLOPs analysis:")
         print(flop_count_table(flops_analysis, max_depth=2))
         
     except ImportError:
-        print("警告: 未安装fvcore，无法计算FLOPs")
-        print("请运行: pip install fvcore")
+        print("Warning: fvcore not installed, cannot calculate FLOPs")
+        print("Please run: pip install fvcore")
     except Exception as e:
-        print(f"FLOPs计算出错: {e}")
+        print(f"FLOPs calculation error: {e}")
     
-    # 计算FPS（每秒帧数）
-    print("\n计算FPS...")
+    print("\nCalculating FPS...")
     try:
         import time
         
-        # 预热
         net.eval()
         with torch.no_grad():
             for _ in range(10):
                 _ = net(input_data)
         
-        # 同步GPU（如果有）
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         
-        # 计时多次推理
         num_runs = 100
         start_time = time.time()
         
@@ -832,23 +700,21 @@ if __name__ == "__main__":
             for _ in range(num_runs):
                 _ = net(input_data)
         
-        # 同步GPU（如果有）
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         
         end_time = time.time()
         
-        # 计算FPS
         total_time = end_time - start_time
         fps = num_runs / total_time
-        avg_time_per_frame = total_time / num_runs * 1000  # 转换为毫秒
+        avg_time_per_frame = total_time / num_runs * 1000
         
-        print(f"运行次数: {num_runs}")
-        print(f"总耗时: {total_time:.4f} 秒")
-        print(f"平均每帧耗时: {avg_time_per_frame:.4f} ms")
+        print(f"Number of runs: {num_runs}")
+        print(f"Total time: {total_time:.4f} seconds")
+        print(f"Average time per frame: {avg_time_per_frame:.4f} ms")
         print(f"FPS: {fps:.2f}")
         
     except Exception as e:
-        print(f"FPS计算出错: {e}")
+        print(f"FPS calculation error: {e}")
     
-    print("\n✅ ColourNet 参数量、FLOPs和FPS计算完成!")
+    print("\n FDDNet parameter, FLOPs and FPS calculation completed!")
