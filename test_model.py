@@ -91,22 +91,14 @@ def load_checkpoint(model, checkpoint_path, device='cpu', strict=True):
             name = name[7:]
         
         # Map old checkpoint format to new model format
-        # 处理 net.backbone.* 格式
         if name.startswith('net.backbone.backbone.backbone.'):
-            # net.backbone.backbone.backbone.* -> backbone.backbone.backbone.*
             name = name.replace('net.backbone.backbone.backbone.', 'backbone.backbone.backbone.')
         elif name.startswith('net.backbone.backbone.'):
-            # net.backbone.backbone.* -> backbone.backbone.backbone.* (添加一层backbone)
             name = name.replace('net.backbone.backbone.', 'backbone.backbone.backbone.')
         elif name.startswith('net.backbone.'):
-            # net.backbone.* -> backbone.backbone.*
             name = name.replace('net.backbone.', 'backbone.backbone.')
         
-        # 处理直接的 backbone.backbone.* 格式（checkpoint中可能是这种格式）
-        # 需要映射到 backbone.backbone.backbone.* (因为模型结构是 myModel -> ChangeDetectionBackbone -> VGG11Backbone -> timm模型)
         if name.startswith('backbone.backbone.') and not name.startswith('backbone.backbone.backbone.'):
-            # 检查是否是timm模型的特征层（如features_*, layer*, blocks*, stages*等）
-            # 这些需要添加一层backbone，因为timm模型在VGG11Backbone内部
             if any(keyword in name for keyword in ['features_', 'layer', 'blocks', 'stages', 'conv', 'bn']):
                 name = name.replace('backbone.backbone.', 'backbone.backbone.backbone.', 1)
         
@@ -374,16 +366,14 @@ def main():
     
     # Build model
     print("\nBuilding model...")
-    # channel_list会根据backbone自动选择，不需要手动指定
     model = build_model(
         backbone_name=args.backbone,
         num_class=args.num_class,
         pretrained=args.pretrained,
-        channel_list=None,  # None表示根据backbone自动选择
+        channel_list=None,
         transform_feat=128
     )
     
-    # 验证模型类型
     if not isinstance(model, myModel):
         raise TypeError(f"Expected myModel instance, got {type(model)}")
     
@@ -408,13 +398,10 @@ def main():
         if not os.path.exists(args.data_root):
             raise ValueError(f"Data root directory does not exist: {args.data_root}")
         
-        # folder模式：测试文件夹中所有图片，标签可选
-        # custom模式：必须有标签
         if args.dataset == 'custom':
             label_dir = args.label_dir
             has_labels = True
         elif args.dataset == 'folder':
-            # folder模式：如果提供了label_dir且存在，则使用标签
             if args.label_dir:
                 label_path = os.path.join(args.data_root, args.label_dir)
                 if os.path.exists(label_path):
@@ -453,7 +440,6 @@ def main():
     
     # Test model
     print("\nTesting model...")
-    # has_labels已经在上面确定了
     results = test_model(model, dataloader, device=device, num_batches=args.num_batches, has_labels=has_labels)
     
     # Print results
