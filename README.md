@@ -126,7 +126,7 @@ dataset_root/
 
 Pre-trained model weights are available for download via Google Drive:
 
-🔗 **[Download Pre-trained Model Weights]([https://drive.google.com/drive/folders/YOUR_FOLDER_ID](https://drive.google.com/drive/folders/13HOrmdQp1Tf9mXg7c1Du_DE5wcEB5D1P?usp=drive_link))**
+🔗 **[Download Pre-trained Model Weights](https://drive.google.com/drive/folders/13HOrmdQp1Tf9mXg7c1Du_DE5wcEB5D1P?usp=drive_link)**
 
 **Note:** Currently, only VGG11 backbone weights are available. The weights are trained on multiple datasets and can be used for inference.
 
