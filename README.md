@@ -6,7 +6,7 @@
 
 ## 📖 Introduction
 
-FDDNet (Focus on Differences, Discover Changes) is a deep learning model for remote sensing image change detection. The model focuses on difference regions to discover changes, featuring an innovative architecture design including Magnitude-based Adaptive Difference Enhancement (MAD) module, pixel-level adaptive feature fusion module, and progressive Gaussian diffusion decoder.
+FDDNet (Focus on Differences, Discover Changes) is a deep learning model for remote sensing image change detection. The model focuses on difference regions to discover changes, featuring an innovative architecture design including  Magnitude-Aware Difference (MAD) module, Pixel Adaptive Distance Feature Fusion module, and Progressive Gaussian Decoder.
 
 ![FDDNet Architecture](FDDNet.png)
 
@@ -229,4 +229,5 @@ Thanks to the following open-source projects:
 ---
 
 **FDDNet: Focus on Differences, Discover Changes**
+
 
