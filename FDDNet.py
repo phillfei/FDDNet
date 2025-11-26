@@ -1,7 +1,3 @@
-# spatial and temporal feature fusion for change detection of remote sensing images
-# STNet11
-# Author: xwma
-# Time: 2022.11.2
 
 from turtle import forward
 
@@ -718,3 +714,4 @@ if __name__ == "__main__":
         print(f"FPS calculation error: {e}")
     
     print("\n FDDNet parameter, FLOPs and FPS calculation completed!")
+
