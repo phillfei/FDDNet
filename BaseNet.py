@@ -1,7 +1,3 @@
-# spatial and temporal feature fusion for change detection of remote sensing images
-# STNet11
-# Author: xwma
-# Time: 2022.11.2
 
 from turtle import forward
 
@@ -444,3 +440,4 @@ if __name__ == "__main__":
     flops, params = thop.profile(net, inputs=(xa,xb,))
     #print(out.shape)
     print(flops/1e9, params/1e6)
+
